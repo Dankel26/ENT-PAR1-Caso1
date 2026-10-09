@@ -77,7 +77,7 @@ public class SimulationManager : MonoBehaviour
             if (prisoner == null)
                 continue;
 
-            prisoner.map = mapBounds;
+            prisoner.InitializeMap(mapBounds);
 
             if (prisoner.homeCell == null)
             {

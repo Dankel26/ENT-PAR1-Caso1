@@ -1,16 +1,17 @@
+
 using UnityEngine;
 
 public class Guard : MonoBehaviour
 {
     [Header("Guard Settings")]
-    public float patrolSpeed = 1f;
-    public float chaseSpeed = 2.2f;
-    public float visionRange = 4f;           // menor que la del preso: el preso lo ve primero
-    public float hiddenDetectionRange = 1f;  // un preso escondido solo se ve a esta distancia
-    public float catchRange = 0.4f;
-    public float hearingRange = 12f;         // hasta dónde oye la alarma de fuga
-    public float investigateTime = 4f;       // segundos que revisa el lugar de una alarma
-    public float loseTargetTime = 2f;        // segundos persiguiendo sin ver al preso antes de rendirse
+    [Min(0f)] public float patrolSpeed = 1f;
+    [Min(0.1f)] public float chaseSpeed = 2.2f;
+    [Min(0.1f)] public float visionRange = 4f;
+    [Min(0.1f)] public float hiddenDetectionRange = 1f;
+    [Min(0.1f)] public float catchRange = 0.5f;
+    [Min(0f)] public float hearingRange = 12f;
+    [Min(0f)] public float investigateTime = 4f;
+    [Min(0f)] public float loseTargetTime = 2f;
 
     [Header("Patrol")]
     public Transform[] patrolPoints;
@@ -19,13 +20,13 @@ public class Guard : MonoBehaviour
     public GuardState currentState = GuardState.Patrolling;
     public Prisoner target;
 
-    private int patrolIndex = 0;
+    private int patrolIndex;
     private Vector3 destination;
     private Vector3 investigatePos;
     private Vector3 lastKnownPos;
     private float currentSpeed;
-    private float investigateTimer = 0f;
-    private float lostTimer = 0f;
+    private float investigateTimer;
+    private float lostTimer;
     private float h;
 
     private void OnEnable()
@@ -44,13 +45,19 @@ public class Guard : MonoBehaviour
 
         if (patrolPoints != null && patrolPoints.Length > 0)
         {
-            destination = patrolPoints[0].position;
+            patrolIndex = 0;
+
+            if (patrolPoints[0] != null)
+                destination = patrolPoints[0].position;
         }
     }
 
-    public void Simulate(float h)
+    public void Simulate(float step)
     {
-        this.h = h;
+        if (step <= 0f)
+            return;
+
+        h = step;
         currentSpeed = 0f;
 
         EvaluateState();
@@ -60,12 +67,15 @@ public class Guard : MonoBehaviour
             case GuardState.Patrolling:
                 Patrol();
                 break;
+
             case GuardState.Investigating:
                 Investigate();
                 break;
+
             case GuardState.Chasing:
                 Chase();
                 break;
+
             case GuardState.Escorting:
                 Escort();
                 break;
@@ -74,13 +84,13 @@ public class Guard : MonoBehaviour
         Move();
     }
 
-    void EvaluateState()
+    private void EvaluateState()
     {
-        // Mientras escolta a un preso no se distrae con nada más.
-        if (currentState == GuardState.Escorting) return;
+        if (currentState == GuardState.Escorting)
+            return;
 
-        // 1. Si ve a un preso libre -> perseguirlo
         Prisoner seen = FindVisiblePrisoner();
+
         if (seen != null)
         {
             target = seen;
@@ -90,43 +100,44 @@ public class Guard : MonoBehaviour
             return;
         }
 
-        // 2. Si perseguía y lo perdió de vista -> insistir un rato y luego investigar
         if (currentState == GuardState.Chasing)
         {
             lostTimer += h;
+
             if (lostTimer >= loseTargetTime)
             {
+                Vector3 lastPosition = lastKnownPos;
                 target = null;
-                BeginInvestigation(lastKnownPos);
+                BeginInvestigation(lastPosition);
             }
         }
-
-        // 3. Investigating y Patrolling se resuelven solos en sus métodos.
     }
 
-    void Patrol()
+    private void Patrol()
     {
-        currentSpeed = patrolSpeed;
-
-        // Si no hay puntos asignados, permanece en su posición actual
         if (patrolPoints == null || patrolPoints.Length == 0)
         {
             destination = transform.position;
             return;
         }
 
-        destination = patrolPoints[patrolIndex].position;
-
-        if (Vector2.Distance(transform.position, destination) < 0.2f)
+        if (patrolPoints[patrolIndex] == null)
         {
             patrolIndex = (patrolIndex + 1) % patrolPoints.Length;
+            return;
         }
+
+        destination = patrolPoints[patrolIndex].position;
+        currentSpeed = patrolSpeed;
+
+        if (Vector2.Distance(transform.position, destination) < 0.2f)
+            patrolIndex = (patrolIndex + 1) % patrolPoints.Length;
     }
 
-    void Investigate()
+    private void Investigate()
     {
-        currentSpeed = patrolSpeed * 1.5f;
         destination = investigatePos;
+        currentSpeed = patrolSpeed * 1.5f;
 
         if (Vector2.Distance(transform.position, investigatePos) < 0.3f)
         {
@@ -134,15 +145,17 @@ public class Guard : MonoBehaviour
 
             if (investigateTimer >= investigateTime)
             {
+                investigateTimer = 0f;
                 currentState = GuardState.Patrolling;
             }
         }
     }
 
-    void Chase()
+    private void Chase()
     {
-        // Si el preso ya no es perseguible (capturado, escapó, volvió a celda), vuelve a patrullar.
-        if (target == null || !target.gameObject.activeSelf || !target.IsFree)
+        if (target == null ||
+            !target.gameObject.activeInHierarchy ||
+            !target.IsFree)
         {
             target = null;
             currentState = GuardState.Patrolling;
@@ -151,58 +164,90 @@ public class Guard : MonoBehaviour
 
         currentSpeed = chaseSpeed;
 
-        if (Vector2.Distance(transform.position, target.transform.position) <= visionRange)
+        float distance = Vector2.Distance(
+            transform.position, target.transform.position
+        );
+
+        if (distance <= visionRange)
         {
             lastKnownPos = target.transform.position;
+            lostTimer = 0f;
         }
 
         destination = lastKnownPos;
 
-        if (Vector2.Distance(transform.position, target.transform.position) <= catchRange)
-        {
+        if (distance <= catchRange)
             CatchTarget();
-        }
     }
 
-    void CatchTarget()
+    private void CatchTarget()
     {
+        if (target == null)
+            return;
+
+        // Sin celda de retorno no iniciamos una escolta imposible.
+        if (target.homeCell == null)
+        {
+            Debug.LogError(
+                $"{target.name}: no tiene celda asignada; no se puede escoltar.",
+                target
+            );
+            return;
+        }
+
         target.Capture();
         currentState = GuardState.Escorting;
+        destination = target.homeCell.transform.position;
 
-        if (target.homeCell != null)
-        {
-            destination = target.homeCell.transform.position;
-        }
+        Debug.Log($"{name}: capturó a {target.name}.", this);
     }
 
-    void Escort()
+    private void Escort()
     {
         if (target == null || target.homeCell == null)
         {
+            Debug.LogError(
+                $"{name}: se interrumpió la escolta porque falta el preso o su celda.",
+                this
+            );
+
             target = null;
             currentState = GuardState.Patrolling;
             return;
         }
 
+        Cell cell = target.homeCell;
+        destination = cell.transform.position;
         currentSpeed = patrolSpeed;
-        destination = target.homeCell.transform.position;
 
-        // El preso va pegado al guardia mientras lo escoltan.
-        target.transform.position = transform.position + new Vector3(0.5f, 0f, 0f);
+        // Mover primero al guardia; el preso acompaña su posición.
+        Vector3 nextGuardPosition = Vector3.MoveTowards(
+            transform.position,
+            destination,
+            currentSpeed * h
+        );
 
-        if (Vector2.Distance(transform.position, destination) < 0.3f)
+        transform.position = nextGuardPosition;
+        target.transform.position =
+            nextGuardPosition + new Vector3(0.5f, 0f, 0f);
+
+        if (Vector2.Distance(transform.position, destination) <= 0.3f)
         {
-            Cell cell = target.homeCell;
             target.ReturnToCell(cell);
-            cell.Close();
 
             target = null;
             currentState = GuardState.Patrolling;
+            currentSpeed = 0f;
+            destination = transform.position;
         }
     }
 
-    void Move()
+    private void Move()
     {
+        // Escort ya gestiona el movimiento y el acompañamiento.
+        if (currentState == GuardState.Escorting)
+            return;
+
         transform.position = Vector3.MoveTowards(
             transform.position,
             destination,
@@ -210,50 +255,65 @@ public class Guard : MonoBehaviour
         );
     }
 
-    void BeginInvestigation(Vector3 pos)
+    private void BeginInvestigation(Vector3 position)
     {
         currentState = GuardState.Investigating;
-        investigatePos = pos;
+        investigatePos = position;
         investigateTimer = 0f;
     }
 
-    // Se dispara cuando un preso abre su celda (evento Prisoner.EscapeAlarm).
-    void HearAlarm(Vector3 pos)
+    private void HearAlarm(Vector3 position)
     {
-        if (currentState == GuardState.Chasing || currentState == GuardState.Escorting) return;
-        if (Vector2.Distance(transform.position, pos) > hearingRange) return;
+        if (currentState == GuardState.Chasing ||
+            currentState == GuardState.Escorting)
+            return;
 
-        BeginInvestigation(pos);
+        if (Vector2.Distance(transform.position, position) > hearingRange)
+            return;
+
+        BeginInvestigation(position);
     }
 
-    // Lo llama un preso que hace ruido para distraerlo.
-    public void Distract(Vector3 pos)
+    public void Distract(Vector3 position)
     {
-        if (currentState == GuardState.Chasing || currentState == GuardState.Escorting) return;
+        if (currentState == GuardState.Chasing ||
+            currentState == GuardState.Escorting)
+            return;
 
-        BeginInvestigation(pos);
+        BeginInvestigation(position);
     }
 
-    Prisoner FindVisiblePrisoner()
+    private Prisoner FindVisiblePrisoner()
     {
-        Collider2D[] hits = Physics2D.OverlapCircleAll(transform.position, visionRange, LayerMask.GetMask("Prisoners"));
+        Collider2D[] hits = Physics2D.OverlapCircleAll(
+            transform.position,
+            visionRange,
+            LayerMask.GetMask("Prisoners")
+        );
+
         Prisoner nearest = null;
-        float minDist = Mathf.Infinity;
+        float minDistance = Mathf.Infinity;
 
         foreach (Collider2D hit in hits)
         {
-            Prisoner p = hit.GetComponent<Prisoner>();
-            if (p == null || !p.IsFree) continue;
+            Prisoner prisoner = hit.GetComponentInParent<Prisoner>();
 
-            float dist = Vector2.Distance(transform.position, p.transform.position);
+            if (prisoner == null ||
+                !prisoner.gameObject.activeInHierarchy ||
+                !prisoner.IsFree)
+                continue;
 
-            // Un preso escondido solo se detecta desde muy cerca.
-            if (p.isHidden && dist > hiddenDetectionRange) continue;
+            float distance = Vector2.Distance(
+                transform.position, prisoner.transform.position
+            );
 
-            if (dist < minDist)
+            if (prisoner.isHidden && distance > hiddenDetectionRange)
+                continue;
+
+            if (distance < minDistance)
             {
-                minDist = dist;
-                nearest = p;
+                minDistance = distance;
+                nearest = prisoner;
             }
         }
 
