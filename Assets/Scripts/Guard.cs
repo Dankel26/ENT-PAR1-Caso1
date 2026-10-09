@@ -108,7 +108,12 @@ public class Guard : MonoBehaviour
     {
         currentSpeed = patrolSpeed;
 
-        if (patrolPoints == null || patrolPoints.Length == 0) return;
+        // Si no hay puntos asignados, permanece en su posición actual
+        if (patrolPoints == null || patrolPoints.Length == 0)
+        {
+            destination = transform.position;
+            return;
+        }
 
         destination = patrolPoints[patrolIndex].position;
 
@@ -145,6 +150,12 @@ public class Guard : MonoBehaviour
         }
 
         currentSpeed = chaseSpeed;
+
+        if (Vector2.Distance(transform.position, target.transform.position) <= visionRange)
+        {
+            lastKnownPos = target.transform.position;
+        }
+
         destination = lastKnownPos;
 
         if (Vector2.Distance(transform.position, target.transform.position) <= catchRange)

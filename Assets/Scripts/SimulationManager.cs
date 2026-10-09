@@ -1,11 +1,17 @@
+
 using System.Collections.Generic;
 using UnityEngine;
 
 public class SimulationManager : MonoBehaviour
 {
     [Header("Simulation Settings")]
-    public float secondsPerIteration = 1.0f;
-    private float time = 0f;
+    [Min(0.02f)]
+    public float secondsPerIteration = 0.1f;
+
+    [Min(1)]
+    public int maxStepsPerFrame = 5;
+
+    private float timeAccumulator;
 
     [Header("Map Boundaries")]
     public Collider2D mapBoundsCollider;
@@ -16,102 +22,154 @@ public class SimulationManager : MonoBehaviour
     public List<Prisoner> prisoners = new List<Prisoner>();
     public List<Guard> guards = new List<Guard>();
 
-    void Start()
+    private void Start()
     {
-        // 1. Configuración de los límites del mapa para los presos
+        RefreshMapBounds();
+        FindEntities();
+        InitializeEntities();
+    }
+
+    private void RefreshMapBounds()
+    {
         if (mapBoundsCollider != null)
         {
             mapBounds = mapBoundsCollider.bounds;
         }
         else
         {
-            mapBounds = new Bounds(Vector3.zero, new Vector3(30f, 30f, 0f));
+            Debug.LogError(
+                "SimulationManager: asigna Map Bounds Collider en el Inspector.",
+                this
+            );
+
+            mapBounds = new Bounds(
+                Vector3.zero,
+                new Vector3(30f, 30f, 0f)
+            );
         }
-
-        // 2. Búsqueda de todas las entidades en la escena
-        Cell[] foundCells = FindObjectsByType<Cell>(FindObjectsSortMode.InstanceID);
-        cells = new List<Cell>(foundCells);
-
-        Prisoner[] foundPrisoners = FindObjectsByType<Prisoner>(FindObjectsSortMode.InstanceID);
-        prisoners = new List<Prisoner>(foundPrisoners);
-
-        Guard[] foundGuards = FindObjectsByType<Guard>(FindObjectsSortMode.InstanceID);
-        guards = new List<Guard>(foundGuards);
-
-        // 3. Inicialización de referencias requeridas en los agentes
-        InitializeEntities();
     }
 
-    void InitializeEntities()
+    private void FindEntities()
+    {
+        cells = new List<Cell>(
+            FindObjectsByType<Cell>(FindObjectsSortMode.InstanceID)
+        );
+
+        prisoners = new List<Prisoner>(
+            FindObjectsByType<Prisoner>(FindObjectsSortMode.InstanceID)
+        );
+
+        guards = new List<Guard>(
+            FindObjectsByType<Guard>(FindObjectsSortMode.InstanceID)
+        );
+
+        Debug.Log(
+            $"Simulación inicializada: {cells.Count} celdas, " +
+            $"{prisoners.Count} presos y {guards.Count} guardias.",
+            this
+        );
+    }
+
+    private void InitializeEntities()
     {
         foreach (Prisoner prisoner in prisoners)
         {
-            if (prisoner != null)
-            {
-                // Asignación de límites para que determine la salida más cercana
-                prisoner.map = mapBounds;
+            if (prisoner == null)
+                continue;
 
-                // Si no se asignó una celda manualmente en el Inspector, se asigna la más cercana
-                if (prisoner.homeCell == null)
-                {
-                    prisoner.homeCell = FindNearestCell(prisoner.transform.position);
-                }
+            prisoner.map = mapBounds;
+
+            if (prisoner.homeCell == null)
+            {
+                prisoner.homeCell = FindNearestCell(
+                    prisoner.transform.position
+                );
+            }
+
+            if (prisoner.homeCell == null)
+            {
+                Debug.LogError(
+                    $"El preso {prisoner.name} no tiene una celda asignada " +
+                    "y no se encontró ninguna celda en la escena.",
+                    prisoner
+                );
             }
         }
     }
 
-    void Update()
+    private void Update()
     {
-        time += Time.deltaTime;
+        float step = Mathf.Max(0.02f, secondsPerIteration);
 
-        if (time >= secondsPerIteration)
+        timeAccumulator += Time.deltaTime;
+
+        int steps = 0;
+
+        while (timeAccumulator >= step && steps < maxStepsPerFrame)
         {
-            time = 0f;
-            SimulateStep();
+            SimulateStep(step);
+            timeAccumulator -= step;
+            steps++;
+        }
+
+        // Si hay demasiados pasos pendientes, descartamos el exceso
+        // para evitar que la simulación se quede atrapada en un bucle.
+        if (steps >= maxStepsPerFrame && timeAccumulator >= step)
+        {
+            timeAccumulator = Mathf.Min(timeAccumulator, step);
         }
     }
 
-    void SimulateStep()
+    private void SimulateStep(float step)
     {
-        // 1. Simular Celdas (degradación de forzado de cerradura y temporizador de autocierre)
-        foreach (Cell c in cells)
+        // 1. Celdas
+        foreach (Cell cell in cells)
         {
-            if (c != null)
+            if (cell != null && cell.gameObject.activeInHierarchy)
             {
-                c.Simulate(secondsPerIteration);
+                cell.Simulate(step);
             }
         }
 
-        // 2. Simular Presos (espera, forzado de celda, huida, cansancio, distracción y escondites)
-        foreach (Prisoner p in prisoners)
+        // 2. Presos
+        foreach (Prisoner prisoner in prisoners)
         {
-            if (p != null && p.gameObject.activeSelf && p.currentState != PrisonerState.Escaped)
+            if (prisoner != null &&
+                prisoner.gameObject.activeInHierarchy &&
+                prisoner.currentState != PrisonerState.Escaped)
             {
-                p.Simulate(secondsPerIteration);
+                prisoner.Simulate(step);
             }
         }
 
-        // 3. Simular Guardias (patrulla, investigación de alarmas, persecución y retorno a celda)
-        foreach (Guard g in guards)
+        // 3. Guardias
+        foreach (Guard guard in guards)
         {
-            if (g != null && g.gameObject.activeSelf)
+            if (guard != null && guard.gameObject.activeInHierarchy)
             {
-                g.Simulate(secondsPerIteration);
+                guard.Simulate(step);
             }
         }
     }
 
-    Cell FindNearestCell(Vector3 position)
+    private Cell FindNearestCell(Vector3 position)
     {
         Cell nearest = null;
-        float minDist = Mathf.Infinity;
+        float minDistance = Mathf.Infinity;
 
         foreach (Cell cell in cells)
         {
-            float dist = Vector3.Distance(position, cell.transform.position);
-            if (dist < minDist)
+            if (cell == null)
+                continue;
+
+            float distance = Vector2.Distance(
+                position,
+                cell.transform.position
+            );
+
+            if (distance < minDistance)
             {
-                minDist = dist;
+                minDistance = distance;
                 nearest = cell;
             }
         }
@@ -121,7 +179,17 @@ public class SimulationManager : MonoBehaviour
 
     private void OnDrawGizmos()
     {
+        Bounds boundsToDraw = mapBounds;
+
+        if (mapBoundsCollider != null)
+        {
+            boundsToDraw = mapBoundsCollider.bounds;
+        }
+
         Gizmos.color = Color.cyan;
-        Gizmos.DrawWireCube(mapBounds.center, mapBounds.size);
+        Gizmos.DrawWireCube(
+            boundsToDraw.center,
+            boundsToDraw.size
+        );
     }
 }
